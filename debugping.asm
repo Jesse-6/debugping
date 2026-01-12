@@ -67,9 +67,6 @@ _bss        tm_send             TIMESPEC
             
             lp_timestamp        TIMEVAL
             
-            send_ip             SOCKADDR_IN AF_INET
-            receive_ip          SOCKADDR_IN AF_INET
-            
             icmp_receive        ICMPHDR
             payload_receive     rb PAYLOAD_SIZE - 8
             receive_hash        dq ?
@@ -88,6 +85,9 @@ _bss        tm_send             TIMESPEC
             
 _data       so_timeout          TIMEVAL DEFAULT_TIMEOUT - 1, 900000
             sel_timeout         TIMEVAL DEFAULT_TIMEOUT, 0
+            
+            send_ip             SOCKADDR_IN AF_INET
+            receive_ip          SOCKADDR_IN AF_INET
             
             icmp_send           ICMPHDR ICMP_ECHO, 0, 1 bswap 2, 1 bswap 2
             payload_send        db "ICMP ping program written with fasm2 assembler!", 0
@@ -320,7 +320,7 @@ _code       Start entry         endbr64
                                 fincstp
                                 ffree       st7
                                 faddp       st2, st0            ; st0 = reply, st1 = send
-                                fsubrp      st1, st0            ; st0 = latecy (s)                        
+                                fsubrp      st1, st0            ; st0 = latency (s)                        
                                 fst         st1
                                 fstp        [sec_latency]
                                 fimul       dword [rsp+8]       ; st0 = latency (ms)
