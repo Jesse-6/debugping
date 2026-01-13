@@ -99,6 +99,10 @@ _data       so_timeout          TIMEVAL DEFAULT_TIMEOUT - 1, 900000
             
             flags               db 0
             
+            in_yellow           db 27, '[1;33m', 0
+            in_red              db 27, '[1;31m'
+            empty               db 0
+            
             align 4
             receive_ip_size     dd sizeof(SOCKADDR_IN)  ; ugly, but needed for recvfrom()
             
@@ -219,10 +223,6 @@ _code       Start entry         endbr64
                                 jnz         .exit_ping
                                 lock and    [flags], not FLAG_REPLY_TIMEOUT
                                 
-                                gettimeofday(&lp_timestamp, NULL);
-                                localtime(&lp_timestamp.tv_sec);
-                                strftime(&gp_buffer, 255, "%Y-%m-%d %H:%M:%S.", rax);
-                                
                                 rdtsc
                                 xor         rdx, [tm_send.tv_nsec]
                                 shl         rdx, 32
@@ -234,23 +234,6 @@ _code       Start entry         endbr64
                                 rol         rax, cl
                                 mov         [hash_seed], rax
                                 
-                                lea         rdi, [gp_buffer]
-                                xor         al, al
-                                mov         ecx, 256
-                                repne       scasb
-                                dec         rdi
-                                snprintf(rdi, 7, "%06lu", [lp_timestamp.tv_usec]);
-                                
-                                ; wait
-                                ; push        1000000
-                                ; fninit
-                                ; fild        [lp_timestamp.tv_usec]
-                                ; fidiv       dword [rsp]
-                                ; fild        [lp_timestamp.tv_sec]
-                                ; faddp       st1, st0
-                                ; fstp        [lp_ftimestamp]
-                                ; add         rsp, 8
-
                                 sendto([rbp-8], &icmp_send, (sizeof(ICMPHDR) + PAYLOAD_SIZE), \
                                     0, &send_ip, sizeof(SOCKADDR_IN));
                                 test        rax, rax
@@ -261,6 +244,16 @@ _code       Start entry         endbr64
                                 sub         rsp, 8
                                 
                                 clock_gettime(CLOCK_MONOTONIC, &tm_send);
+                                
+                                gettimeofday(&lp_timestamp, NULL);
+                                localtime(&lp_timestamp.tv_sec);
+                                strftime(&gp_buffer, 255, "%Y-%m-%d %H:%M:%S.", rax);
+                                lea         rdi, [gp_buffer]
+                                xor         al, al
+                                mov         ecx, 256
+                                repne       scasb
+                                dec         rdi
+                                snprintf(rdi, 7, "%06lu", [lp_timestamp.tv_usec]);
                                 
                                 inet_ntoa([send_ip.sin_addr]);
                                 
@@ -343,15 +336,30 @@ _code       Start entry         endbr64
                                 inet_ntoa([receive_ip.sin_addr]);
                                 add         rsp, 8
                                 pop         rcx
+                                
+                                lea         rdi, [receive_hash]
+                                lea         rsi, [tsc_hash]
+                                lea         rdx, [in_yellow]
+                                lea         r10, [empty]
+                                cmpsq
+                                cmovne      r10, rdx
+                                
+                                lea         rdi, [receive_ip.sin_addr]
+                                lea         rsi, [send_ip.sin_addr]
+                                lea         r11, [empty]
+                                lea         rdx, [in_red]
+                                cmpsd
+                                cmove       rdx, r11
+                                
                                 movbe       r8w, [icmp_receive.echo.id]
-                                movbe       r9w, [icmp_receive.echo.sequence]
+                                movbe       r11w, [icmp_receive.echo.sequence]
                                 movzx       r8, r8w
-                                movzx       r9, r9w
+                                movzx       r11, r11w
                                 fprintf([stdout], \
                                     <"Received ITER=%u LEN=%lu ID=%u ",27,"[36mSEQ=%u",27, \
-                                    "[0m HASH=%016lX ",27,"[32mLATENCY: %.3Lfms",27, \
-                                    "[0m FROM=%s",10,0>, [sent], rcx, r8, r9, \
-                                    [receive_hash], [msec_latency], rax);
+                                    "[0m HASH=%s%016lX ",27,"[32mLATENCY: %.3Lfms",27, \
+                                    "[0m FROM=%s%s",27,"[0m",10,0>, [sent], rcx, r8, r11, \
+                                    r10, [receive_hash], [msec_latency], rdx, rax);
                                 add         rsp, 16
 
                 .next_ping:     test        [flags], FLAG_REPLY_TIMEOUT
