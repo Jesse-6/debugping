@@ -78,10 +78,12 @@ _bss        tm_send             TIMESPEC
             hash_seed           dq ?
             sec_latency         dt ?
             msec_latency        dt ?
-            lp_ftimestamp       dt ?
+            ; lp_ftimestamp       dt ?
             min_latency         dt ?
             avg_latency         dt ?
             max_latency         dt ?
+            
+            gp_buffer           rb 256
             
 _data       so_timeout          TIMEVAL DEFAULT_TIMEOUT - 1, 900000
             sel_timeout         TIMEVAL DEFAULT_TIMEOUT, 0
@@ -218,6 +220,8 @@ _code       Start entry         endbr64
                                 lock and    [flags], not FLAG_REPLY_TIMEOUT
                                 
                                 gettimeofday(&lp_timestamp, NULL);
+                                localtime(&lp_timestamp.tv_sec);
+                                strftime(&gp_buffer, 255, "%Y-%m-%d %H:%M:%S.", rax);
                                 
                                 rdtsc
                                 xor         rdx, [tm_send.tv_nsec]
@@ -230,15 +234,22 @@ _code       Start entry         endbr64
                                 rol         rax, cl
                                 mov         [hash_seed], rax
                                 
-                                wait
-                                push        1000000
-                                fninit
-                                fild        [lp_timestamp.tv_usec]
-                                fidiv       dword [rsp]
-                                fild        [lp_timestamp.tv_sec]
-                                faddp       st1, st0
-                                fstp        [lp_ftimestamp]
-                                add         rsp, 8
+                                lea         rdi, [gp_buffer]
+                                xor         al, al
+                                mov         ecx, 256
+                                repne       scasb
+                                dec         rdi
+                                snprintf(rdi, 7, "%06lu", [lp_timestamp.tv_usec]);
+                                
+                                ; wait
+                                ; push        1000000
+                                ; fninit
+                                ; fild        [lp_timestamp.tv_usec]
+                                ; fidiv       dword [rsp]
+                                ; fild        [lp_timestamp.tv_sec]
+                                ; faddp       st1, st0
+                                ; fstp        [lp_ftimestamp]
+                                ; add         rsp, 8
 
                                 sendto([rbp-8], &icmp_send, (sizeof(ICMPHDR) + PAYLOAD_SIZE), \
                                     0, &send_ip, sizeof(SOCKADDR_IN));
@@ -254,16 +265,16 @@ _code       Start entry         endbr64
                                 inet_ntoa([send_ip.sin_addr]);
                                 
                                 movbe       r8w, [icmp_send.echo.id]
-                                movbe       r9w, [icmp_send.echo.sequence]
+                                movbe       r10w, [icmp_send.echo.sequence]
                                 movzx       r8, r8w
-                                movzx       r9, r9w
+                                movzx       r10, r10w
                                 
                                 add         rsp, 8
                                 pop         rcx
                                 fprintf([stdout], \
                                     <"Sent ITER=%u LEN=%lu ID=%u ",27,"[36mSEQ=%u",27,"[0m ", \
-                                    "HASH=%016lX TIMESTAMP=%.3Lfs TARGET=%s",10,0>, [sent], \
-                                    rcx, r8, r9, [tsc_hash], [lp_ftimestamp], rax);
+                                    "HASH=%016lX TIMESTAMP=%s TARGET=%s",10,0>, [sent], \
+                                    rcx, r8, r10, [tsc_hash], &gp_buffer, rax);
                                 fflush([stdout]);
                                 
                         @@@     mov         eax, [rbp-8]
