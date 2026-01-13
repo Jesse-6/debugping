@@ -65,8 +65,6 @@ end struct
 _bss        tm_send             TIMESPEC
             tm_receive          TIMESPEC
             
-            lp_timestamp        TIMEVAL
-            
             icmp_receive        ICMPHDR
             payload_receive     rb PAYLOAD_SIZE - 8
             receive_hash        dq ?
@@ -243,17 +241,20 @@ _code       Start entry         endbr64
                                 push        rax
                                 sub         rsp, 8
                                 
-                                clock_gettime(CLOCK_MONOTONIC, &tm_send);
+                                clock_gettime(CLOCK_REALTIME, &tm_send);
                                 
-                                gettimeofday(&lp_timestamp, NULL);
-                                localtime(&lp_timestamp.tv_sec);
+                                localtime(&tm_send.tv_sec);
                                 strftime(&gp_buffer, 255, "%Y-%m-%d %H:%M:%S.", rax);
                                 lea         rdi, [gp_buffer]
                                 xor         al, al
                                 mov         ecx, 256
                                 repne       scasb
                                 dec         rdi
-                                snprintf(rdi, 7, "%06lu", [lp_timestamp.tv_usec]);
+                                mov         rax, [tm_send.tv_nsec]
+                                mov         r11, 1000
+                                cqo
+                                div         r11
+                                snprintf(rdi, 7, "%06lu", rax);
                                 
                                 inet_ntoa([send_ip.sin_addr]);
                                 
@@ -287,7 +288,7 @@ _code       Start entry         endbr64
                                 lock or     [flags], FLAG_REPLY_TIMEOUT
                                 jmp         .next_ping
                                 
-                        @@      clock_gettime(CLOCK_MONOTONIC, &tm_receive);
+                        @@      clock_gettime(CLOCK_REALTIME, &tm_receive);
                                 recvfrom([rbp-8], &icmp_receive, (sizeof(ICMPHDR) + PAYLOAD_SIZE), \
                                     NULL, &receive_ip, &receive_ip_size);
                                 test        rax, rax
