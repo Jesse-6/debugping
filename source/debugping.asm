@@ -54,11 +54,12 @@ struct HOSTENT
     .h_addr_list    dq ?
 end struct
 
-            FLAG_STOP           = 00000001b
-            FLAG_OPEN_SOCKET    = 00000010b
-            FLAG_LOOP_DELAY     = 00000100b
-            FLAG_REPLY_TIMEOUT  = 00001000b
-            FLAG_WEIGHT_VALID   = 00010000b
+            FLAG_STOP               = 00000001b
+            FLAG_OPEN_SOCKET        = 00000010b
+            FLAG_LOOP_DELAY         = 00000100b
+            FLAG_REPLY_TIMEOUT      = 00001000b
+            FLAG_WEIGHT_VALID       = 00010000b
+            FLAG_OVERRIDE_TIMEOUT   = 00100000b
             
             DEFAULT_TIMEOUT     = 5         ; in s
 
@@ -74,6 +75,7 @@ _bss        tm_send             TIMESPEC
             
             loop_delay          dq ?    ; set with env ICMP_LOOP_DELAY in ms (here in µs)
             hash_seed           dq ?
+            override_timeout    dq ?    ; value set by ICMP_PROBE_TIMEOUT env
             sec_latency         dt ?
             msec_latency        dt ?
             ; lp_ftimestamp       dt ?
@@ -91,6 +93,8 @@ _data       so_timeout          TIMEVAL DEFAULT_TIMEOUT - 1, 900000
             
             icmp_send           ICMPHDR ICMP_ECHO, 0, 1 bswap 2, 1 bswap 2
             payload_send        db "ICMP ping program written with fasm2 assembler!", 0
+                                db "Available at: https://github.com/Jesse-6/debugping", 0
+            align 8
             tsc_hash            dq 0
             
             PAYLOAD_SIZE = $ - payload_send
@@ -116,6 +120,23 @@ _code       Start entry         endbr64
                                 shl         rax, 32
                                 or          rax, rdx
                                 ror         rax, cl
+                                pause
+                                pause
+                                pause
+                                pause
+                                mov         r10, rax
+                                pause
+                                pause
+                        @@      pause
+                                dec         cl
+                                jnz         @b
+                                rdtsc
+                                mov         cl, al
+                                shl         rdx, 32
+                                or          rax, rdx
+                                rol         rax, cl
+                                not         rax
+                                xor         rax, r10
                                 mov         [hash_seed], rax
                                 pop         rdx
                                 nop
@@ -176,6 +197,29 @@ _code       Start entry         endbr64
                                 imul        rax, rax, 1000
                                 mov         [loop_delay], rax
                                 lock or     [flags], FLAG_LOOP_DELAY    ; set usleep indicator
+                                
+                        @@      getenv("ICMP_PROBE_TIMEOUT");
+                                test        rax, rax
+                                jz          @f
+                                strtoul(rax, NULL, 10);
+                                test        rax, rax
+                                jz          @f
+                                mov         [override_timeout], rax
+                                cqo
+                                mov         rcx, 1000
+                                lea         r11, [rax+50]
+                                div         rcx
+                                imul        rdx, rcx
+                                mov         [so_timeout.tv_sec], rax
+                                mov         [so_timeout.tv_usec], rdx
+                                mov         rax, r11
+                                cqo
+                                div         rcx
+                                imul        rdx, rcx
+                                mov         [sel_timeout.tv_sec], rax
+                                mov         [sel_timeout.tv_usec], rdx
+                                
+                                lock or     [flags], FLAG_OVERRIDE_TIMEOUT ; set custom timeout
                                 
                         @@      fputs("Pinging to: ", [stdout]);
                                 
@@ -263,12 +307,15 @@ _code       Start entry         endbr64
                                 movzx       r8, r8w
                                 movzx       r10, r10w
                                 
+                                movzx       edx, [icmp_send.type]
+                                movzx       ecx, [icmp_send.code]
+                                
                                 add         rsp, 8
-                                pop         rcx
+                                pop         r11
                                 fprintf([stdout], \
-                                    <"Sent ITER=%u LEN=%lu ID=%u ",27,"[36mSEQ=%u",27,"[0m ", \
-                                    "HASH=%016lX TIMESTAMP=%s TARGET=%s",10,0>, [sent], \
-                                    rcx, r8, r10, [tsc_hash], &gp_buffer, rax);
+                                    <"Sent (%u:%u) ITER=%u LEN=%lu ID=%u ",27,"[36mSEQ=%u",27,"[0m ", \
+                                    "HASH=%016lX TIMESTAMP=%s TARGET=%s",10,0>, edx, ecx, [sent], \
+                                    r11, r8, r10, [tsc_hash], &gp_buffer, rax);
                                 fflush([stdout]);
                                 
                         @@@     mov         eax, [rbp-8]
@@ -352,14 +399,18 @@ _code       Start entry         endbr64
                                 cmpsd
                                 cmove       rdx, r11
                                 
+                                movzx       edi, [icmp_receive.type]
+                                movzx       esi, [icmp_receive.code]
+                                
                                 movbe       r8w, [icmp_receive.echo.id]
                                 movbe       r11w, [icmp_receive.echo.sequence]
                                 movzx       r8, r8w
                                 movzx       r11, r11w
                                 fprintf([stdout], \
-                                    <"Received ITER=%u LEN=%lu ID=%u ",27,"[36mSEQ=%u",27, \
-                                    "[0m HASH=%s%016lX ",27,"[32mLATENCY: %.3Lfms",27, \
-                                    "[0m FROM=%s%s",27,"[0m",10,0>, [sent], rcx, r8, r11, \
+                                    <"Received (%u:%u) ITER=%u LEN=%lu ID=%u ",27, \
+                                    "[36mSEQ=%u",27, "[0m HASH=%s%016lX ",27, \
+                                    "[32mLATENCY: %.3Lfms",27, "[0m FROM=%s%s",27, \
+                                    "[0m",10,0>, edi, esi, [sent], rcx, r8, r11, \
                                     r10, [receive_hash], [msec_latency], rdx, rax);
                                 add         rsp, 16
 
@@ -403,10 +454,21 @@ _code       Start entry         endbr64
                                 adc         cx, 0
                                 movbe       [icmp_send.echo.sequence], dx
                                 movbe       [icmp_send.echo.id], cx
-
+                                
+                                test        [flags], FLAG_OVERRIDE_TIMEOUT
+                                jnz         @f
                                 mov         [sel_timeout.tv_sec], DEFAULT_TIMEOUT ; this needs to be
                                 mov         [sel_timeout.tv_usec], 0        ; replenished every loop
-
+                                jmp         .loop_ping
+                                
+                        @@      mov         rax, [override_timeout]
+                                lea         rax, [rax+50]
+                                cqo
+                                mov         rcx, 1000
+                                div         rcx
+                                imul        rdx, rcx
+                                mov         [sel_timeout.tv_sec], rax
+                                mov         [sel_timeout.tv_usec], rdx
                                 jmp         .loop_ping
                                 
                 .err_ping:      test        [flags], FLAG_STOP
