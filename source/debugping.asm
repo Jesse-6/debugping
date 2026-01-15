@@ -60,8 +60,11 @@ end struct
             FLAG_REPLY_TIMEOUT      = 00001000b
             FLAG_WEIGHT_VALID       = 00010000b
             FLAG_OVERRIDE_TIMEOUT   = 00100000b
+            FLAG_SYNC_WAIT_REPLY    = 01000000b
             
             DEFAULT_TIMEOUT     = 5         ; in s
+            
+            SELECT_MS_EXTRA_WAIT   = 10
 
 _bss        tm_send             TIMESPEC
             tm_receive          TIMESPEC
@@ -104,6 +107,20 @@ _data       so_timeout          TIMEVAL DEFAULT_TIMEOUT - 1, 900000
             in_yellow           db 27, '[1;33m', 0
             in_red              db 27, '[1;31m'
             empty               db 0
+            
+            host_str            db 'host', 0
+            network_str         db 'network', 0
+            unreach_str         db 'unreachable', 0
+            
+            Send_str            db 'Send', 0
+            send_str            db 'send', 0
+            receive_str         db 'Receive', 0
+            
+            
+            poll_stats          db 27,"[1;36mCurrent statistics: ",27,"[0m",10
+            exit_stats          db "Sent: %u; Received: %u; Lost: %u;"
+                                db " Unordered: %u; Min: %.3Lfms; Avg: %.3Lfms; "
+                                db "Max: %.3Lfms",27,"[0m%c",0
             
             align 4
             receive_ip_size     dd sizeof(SOCKADDR_IN)  ; ugly, but needed for recvfrom()
@@ -207,7 +224,7 @@ _code       Start entry         endbr64
                                 mov         [override_timeout], rax
                                 cqo
                                 mov         rcx, 1000
-                                lea         r11, [rax+50]
+                                lea         r11, [rax+SELECT_MS_EXTRA_WAIT]
                                 div         rcx
                                 imul        rdx, rcx
                                 mov         [so_timeout.tv_sec], rax
@@ -220,6 +237,20 @@ _code       Start entry         endbr64
                                 mov         [sel_timeout.tv_usec], rdx
                                 
                                 lock or     [flags], FLAG_OVERRIDE_TIMEOUT ; set custom timeout
+                                
+                        @@      getenv("ICMP_SYNC_WAIT_WITH_REPLY");    ; subtract reply time
+                                test        rax, rax            ; from selected loop wait time
+                                jz          @f2
+                                cmp         [rax], word '1'
+                                jne         @f
+                                lock or     [flags], FLAG_SYNC_WAIT_REPLY
+                                jmp         @f2
+                        @@      cmp         [rax], word '0'
+                                je          @f
+                                fputs(<"Error in environment parameter format.", \
+                                    " Quitting...",10,0>, [stderr]);
+                                mov         eax, 126
+                                jmp         .end
                                 
                         @@      fputs("Pinging to: ", [stdout]);
                                 
@@ -278,6 +309,7 @@ _code       Start entry         endbr64
                                 
                                 sendto([rbp-8], &icmp_send, (sizeof(ICMPHDR) + PAYLOAD_SIZE), \
                                     0, &send_ip, sizeof(SOCKADDR_IN));
+                                lea         rdx, [Send_str]
                                 test        rax, rax
                                 js          .err_ping
                                 inc         [sent]
@@ -327,6 +359,7 @@ _code       Start entry         endbr64
                                 
                                 mov         edi, [rbp-8]
                                 select(&edi+1, &fdread_set, NULL, NULL, &sel_timeout);
+                                lea         rdx, [receive_str]
                                 test        eax, eax
                                 js          .err_ping
                                 jnz         @f
@@ -338,6 +371,7 @@ _code       Start entry         endbr64
                         @@      clock_gettime(CLOCK_REALTIME, &tm_receive);
                                 recvfrom([rbp-8], &icmp_receive, (sizeof(ICMPHDR) + PAYLOAD_SIZE), \
                                     NULL, &receive_ip, &receive_ip_size);
+                                lea         rdx, [receive_str]
                                 test        rax, rax
                                 jle         .err_ping
                                 
@@ -443,10 +477,48 @@ _code       Start entry         endbr64
                                 
                         @@      fputc(10, [stdout]);
                                 fflush([stdout]);
+
+                                mov         eax, [sent]
+                                mov         ecx, 100
+                                cdq
+                                div         ecx
+                                test        edx, edx
+                                jnz         @f          ; Print status every 100 loops
                                 
-                                test        [flags], FLAG_LOOP_DELAY
-                                jz          @f
-                                usleep([loop_delay]);
+                                fprintf([stdout], &poll_stats, \
+                                    [sent], [received], [lost], [unordered], [min_latency], \
+                                    [avg_latency], [max_latency], 10);
+                                fputc(10, [stdout]);
+                                fflush([stdout]);
+                                
+                        @@      test        [flags], FLAG_LOOP_DELAY
+                                jz          @f3
+                                test        [flags], FLAG_SYNC_WAIT_REPLY
+                                jz          @f2
+                                
+                        @@      test        [flags], FLAG_REPLY_TIMEOUT
+                                jnz         @f2
+                                wait                    ; sleep synchronized to latency
+                                push        1000
+                                xor         eax, eax
+                                fninit
+                                fild        [loop_delay]    ; already in µs
+                                fld         [msec_latency]  ;
+                                fild        qword [rsp]     ;
+                                fmulp                       ; convert to µs
+                                fsubp                       ; sleep = wait - latency
+                                ftst                        ; cmp with 0.0
+                                fstsw       ax
+                                fistp       qword [rsp]
+                                mov         rdi, [rsp]
+                                shr         eax, 8
+                                mov         [rsp], rax
+                                popfq
+                                jb          @f2
+                                usleep(rdi);
+                                jmp         @f2
+                                
+                        @@      usleep([loop_delay]);
                                 
                         @@      movbe       dx, [icmp_send.echo.sequence]
                                 movbe       cx, [icmp_send.echo.id]
@@ -462,28 +534,55 @@ _code       Start entry         endbr64
                                 jmp         .loop_ping
                                 
                         @@      mov         rax, [override_timeout]
-                                lea         rax, [rax+50]
+                                lea         rax, [rax+SELECT_MS_EXTRA_WAIT]
                                 cqo
                                 mov         rcx, 1000
                                 div         rcx
                                 imul        rdx, rcx
                                 mov         [sel_timeout.tv_sec], rax
                                 mov         [sel_timeout.tv_usec], rdx
+                                
                                 jmp         .loop_ping
                                 
                 .err_ping:      test        [flags], FLAG_STOP
                                 jnz         .exit_ping
                                 errno();
+                                cmp         [rax], dword ENETUNREACH
+                                je          @f2
+                                cmp         [rax], dword EHOSTUNREACH
+                                je          @f
                                 fprintf([stderr], "An error (%u) has occurred: ", dd [rax]);
                                 perror(NULL);
                                 mov         eax, 127
                                 jmp         .end
                                 
+                        @@      lea         r8, [host_str]
+                                jmp         @@f
+                        @@      lea         r8, [network_str]
+                        @@@     lea         r10, [receive_str]
+                                lea         r11, [Send_str]
+                                cmp         rdx, r10
+                                jne         @f
+                                inc         [lost]
+                                jmp         @f2
+                        @@      cmp         rdx, r11
+                                jne         @f
+                                push        r8
+                                sub         rsp, 8
+                                fputs(<27,"[1;31mProgress suspended: ",0>, [stdout]);
+                                add         rsp, 8
+                                pop         r8
+                                lea         rdx, [send_str]
+                        @@      fprintf([stdout], <27,"[0;31m%s error at ITER=%u: %s is %s", \
+                                    27,"[0m",10,0>, rdx, [sent], r8, &unreach_str);
+                                lock or     [flags], FLAG_REPLY_TIMEOUT
+                                fflush([stdout]);
+                                jmp         .next_ping
+                                
                 .exit_ping:     fputs(<10,"Interrupted.",10,0>, [stdout]);
                                 test        [flags], FLAG_WEIGHT_VALID
                                 jz          @f
-                                fprintf([stdout], <"Sent: %u; Received: %u; Lost: %u;", \
-                                    " Unordered: %u; Min: %.3Lfms; Avg: %.3Lfms; Max: %.3Lfms%c",0>, \
+                                fprintf([stdout], &exit_stats, \
                                     [sent], [received], [lost], [unordered], [min_latency], \
                                     [avg_latency], [max_latency], 10);
                                 jmp         @f2
