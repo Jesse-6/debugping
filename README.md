@@ -19,6 +19,13 @@ There is also an option to keep send periodicity in sync with provided (and requ
 ```
 The above will keep as tight as possible to 1000 ms each echo request sent.
 
+##### Colors related to 'LATENCY' field have their meanings as follows:
+- blue: means sampled latency is below or equal the minimum latency;
+- green: means sampled latency is above minimum, but below or equal average latency;
+- yellow: latency is higher than average, but below maximum latency;
+- red: sampled latency is equal or above maximum latency.
+
+
 Use 'CTRL+C' to exit and print status.
 
 To install, just copy the binary under release folder to your preferred bin path location (i.e., /usr/bin or ~/.local/bin) which must be included under PATH environment.

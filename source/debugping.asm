@@ -82,7 +82,6 @@ _bss        tm_send             TIMESPEC
             override_timeout    dq ?    ; value set by ICMP_PROBE_TIMEOUT env
             sec_latency         dt ?
             msec_latency        dt ?
-            ; lp_ftimestamp       dt ?
             min_latency         dt ?
             avg_latency         dt ?
             max_latency         dt ?
@@ -105,8 +104,11 @@ _data       so_timeout          TIMEVAL DEFAULT_TIMEOUT - 1, 900000
             
             flags               db 0
             
-            in_yellow           db 27, '[1;33m', 0
-            in_red              db 27, '[1;31m'
+            in_green            db 27,'[0;38;5;78m',0
+            in_yellow           db 27,'[0;38;5;220m',0
+            in_red              db 27,'[0;38;5;160m',0
+            in_blue             db 27,'[1;38;5;44m',0
+            def_color           db 27,'[0m'
             empty               db 0
             
             host_str            db 'host', 0
@@ -118,9 +120,9 @@ _data       so_timeout          TIMEVAL DEFAULT_TIMEOUT - 1, 900000
             receive_str         db 'Receive', 0
             
             
-            poll_stats          db 27,"[1;36mCurrent statistics: ",27,"[0m",10
+            poll_stats          db 27,"%sCurrent statistics: ",27,"[0m"
             exit_stats          db "Sent: %u; Received: %u; Lost: %u;"
-                                db " Unordered: %u; Min: %.3Lfms; Avg: %.3Lfms; "
+                                db " Unordered: %u; Min: %.3Lfms; %sAvg: %.3Lfms",27,"[0m; "
                                 db "Max: %.3Lfms",27,"[0m%c",0
             
             align 4
@@ -413,6 +415,7 @@ _code       Start entry         endbr64
                                 fimul       dword [rsp+8]       ; st0 = latency (ms)
                                 fstp        [msec_latency]
                                 wait
+                                add         rsp, 16
                                 
                                 push        rax
                                 sub         rsp, 8
@@ -426,6 +429,29 @@ _code       Start entry         endbr64
                                 lea         r10, [empty]
                                 cmpsq
                                 cmovne      r10, rdx
+                                
+                                wait
+                                lea         rdi, [in_green]
+                                lea         rsi, [in_yellow]
+                                fninit
+                                fld         [msec_latency]
+                                fld         [min_latency]
+                                fld         [max_latency]
+                                fld         [avg_latency]
+                                fcomip      st3
+                                wait
+                                cmovb       rdi, rsi
+                                lea         rsi, [in_red]
+                                fcomip      st2
+                                cmovbe      rdi, rsi
+                                lea         rsi, [in_blue]
+                                fcomip      st1
+                                cmovae      rdi, rsi
+                                ffree       st0
+                                test        [flags], FLAG_WEIGHT_VALID
+                                cmovz       rdi, rsi
+                                movq        mm4, rdi
+                                emms
                                 
                                 lea         rdi, [receive_ip.sin_addr]
                                 lea         rsi, [send_ip.sin_addr]
@@ -444,10 +470,9 @@ _code       Start entry         endbr64
                                 fprintf([stdout], \
                                     <"Received (%u:%u) ITER=%u LEN=%lu ID=%u ",27, \
                                     "[36mSEQ=%u",27, "[0m HASH=%s%016lX ",27, \
-                                    "[32mLATENCY: %.3Lfms",27, "[0m FROM=%s%s",27, \
+                                    "%sLATENCY: %.3Lfms",27, "[0m FROM=%s%s",27, \
                                     "[0m",10,0>, edi, esi, [sent], rcx, r8, r11, \
-                                    r10, [receive_hash], [msec_latency], rdx, rax);
-                                add         rsp, 16
+                                    r10, [receive_hash], mm4, [msec_latency], rdx, rax);
 
                 .next_ping:     test        [flags], FLAG_REPLY_ERROR
                                 jz          @f
@@ -499,9 +524,9 @@ _code       Start entry         endbr64
                                 test        edx, edx
                                 jnz         @f          ; Print status every 100 loops
                                 
-                                fprintf([stdout], &poll_stats, \
+                                fprintf([stdout], &poll_stats, &in_blue, \
                                     [sent], [received], [lost], [unordered], [min_latency], \
-                                    [avg_latency], [max_latency], 10);
+                                    &in_blue, [avg_latency], [max_latency], 10);
                                 fputc(10, [stdout]);
                                 fflush([stdout]);
                                 
@@ -599,7 +624,7 @@ _code       Start entry         endbr64
                                 jz          @f
                                 fprintf([stdout], &exit_stats, \
                                     [sent], [received], [lost], [unordered], [min_latency], \
-                                    [avg_latency], [max_latency], 10);
+                                    &in_blue, [avg_latency], [max_latency], 10);
                                 jmp         @f2
                         @@      fprintf([stdout], "Sent: %u; Received: %u; Lost: %u%c", \
                                     [sent], [received], [lost], 10);
