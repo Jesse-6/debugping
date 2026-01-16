@@ -107,7 +107,7 @@ _data       so_timeout          TIMEVAL DEFAULT_TIMEOUT - 1, 900000
             in_green            db 27,'[0;38;5;78m',0
             in_yellow           db 27,'[0;38;5;220m',0
             in_red              db 27,'[0;38;5;160m',0
-            in_blue             db 27,'[1;38;5;44m',0
+            in_blue             db 27,'[0;38;5;44m',0
             def_color           db 27,'[0m'
             empty               db 0
             
@@ -469,7 +469,7 @@ _code       Start entry         endbr64
                                 movzx       r11, r11w
                                 fprintf([stdout], \
                                     <"Received (%u:%u) ITER=%u LEN=%lu ID=%u ",27, \
-                                    "[36mSEQ=%u",27, "[0m HASH=%s%016lX ",27, \
+                                    "[36mSEQ=%u",27, "[0m HASH=%s%016lX ", \
                                     "%sLATENCY: %.3Lfms",27, "[0m FROM=%s%s",27, \
                                     "[0m",10,0>, edi, esi, [sent], rcx, r8, r11, \
                                     r10, [receive_hash], mm4, [msec_latency], rdx, rax);
