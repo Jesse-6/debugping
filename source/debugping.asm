@@ -58,9 +58,10 @@ end struct
             FLAG_OPEN_SOCKET        = 00000010b
             FLAG_LOOP_DELAY         = 00000100b
             FLAG_REPLY_TIMEOUT      = 00001000b
-            FLAG_WEIGHT_VALID       = 00010000b
-            FLAG_OVERRIDE_TIMEOUT   = 00100000b
-            FLAG_SYNC_WAIT_REPLY    = 01000000b
+            FLAG_REPLY_ERROR        = 00010000b
+            FLAG_WEIGHT_VALID       = 00100000b
+            FLAG_OVERRIDE_TIMEOUT   = 01000000b
+            FLAG_SYNC_WAIT_REPLY    = 10000000b
             
             DEFAULT_TIMEOUT     = 5         ; in s
             
@@ -448,7 +449,20 @@ _code       Start entry         endbr64
                                     r10, [receive_hash], [msec_latency], rdx, rax);
                                 add         rsp, 16
 
-                .next_ping:     test        [flags], FLAG_REPLY_TIMEOUT
+                .next_ping:     test        [flags], FLAG_REPLY_ERROR
+                                jz          @f
+                                lock and    [flags], not FLAG_REPLY_ERROR
+                                mov         rdi, [sel_timeout.tv_sec]
+                                imul        rdi, 1000000
+                                add         rdi, [sel_timeout.tv_usec]
+                                test        [flags], FLAG_LOOP_DELAY
+                                cmovnz      rdi, [loop_delay]
+                                usleep(rdi);
+                                test        [flags], FLAG_REPLY_TIMEOUT ; reused for receive error
+                                jnz         @@f
+                                jmp         .loop_ping
+                                
+                        @@      test        [flags], FLAG_REPLY_TIMEOUT
                                 jnz         @f
                                 lock or     [flags], FLAG_WEIGHT_VALID
                                 finit
@@ -492,12 +506,12 @@ _code       Start entry         endbr64
                                 fflush([stdout]);
                                 
                         @@      test        [flags], FLAG_LOOP_DELAY
-                                jz          @f3
-                                test        [flags], FLAG_SYNC_WAIT_REPLY
                                 jz          @f2
+                                test        [flags], FLAG_SYNC_WAIT_REPLY
+                                jz          @@f
                                 
                         @@      test        [flags], FLAG_REPLY_TIMEOUT
-                                jnz         @f2
+                                jnz         @f
                                 wait                    ; sleep synchronized to latency
                                 push        1000
                                 xor         eax, eax
@@ -514,11 +528,11 @@ _code       Start entry         endbr64
                                 shr         eax, 8
                                 mov         [rsp], rax
                                 popfq
-                                jb          @f2
+                                jb          @f
                                 usleep(rdi);
-                                jmp         @f2
+                                jmp         @f
                                 
-                        @@      usleep([loop_delay]);
+                        @@@     usleep([loop_delay]);
                                 
                         @@      movbe       dx, [icmp_send.echo.sequence]
                                 movbe       cx, [icmp_send.echo.id]
@@ -559,11 +573,13 @@ _code       Start entry         endbr64
                         @@      lea         r8, [host_str]
                                 jmp         @@f
                         @@      lea         r8, [network_str]
-                        @@@     lea         r10, [receive_str]
+                        @@@     lock or     [flags], FLAG_REPLY_ERROR
+                                lea         r10, [receive_str]
                                 lea         r11, [Send_str]
                                 cmp         rdx, r10
                                 jne         @f
                                 inc         [lost]
+                                lock or     [flags], FLAG_REPLY_TIMEOUT ; reuse for receive error
                                 jmp         @f2
                         @@      cmp         rdx, r11
                                 jne         @f
@@ -575,7 +591,6 @@ _code       Start entry         endbr64
                                 lea         rdx, [send_str]
                         @@      fprintf([stdout], <27,"[0;31m%s error at ITER=%u: %s is %s", \
                                     27,"[0m",10,0>, rdx, [sent], r8, &unreach_str);
-                                lock or     [flags], FLAG_REPLY_TIMEOUT
                                 fflush([stdout]);
                                 jmp         .next_ping
                                 
