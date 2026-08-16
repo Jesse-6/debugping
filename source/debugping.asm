@@ -1,7 +1,6 @@
 format ELF64 executable 3 at 10 * 1048576
 
-include 'fastcall_v1.inc'
-include 'stdmacros.inc'
+include 'fastcall3.inc'
 include 'stdio.inc'
 
 struct ICMPHDR ty:?, cod:?, _id:?, seq:?
@@ -23,7 +22,7 @@ struct ICMPHDR ty:?, cod:?, _id:?, seq:?
     virtual at .union
         .reserved       rb 4
     end virtual
-end struct
+end struct&
 
 struct SOCKADDR_IN af:?
     .sin_family     dw af
@@ -52,7 +51,7 @@ struct HOSTENT
     .h_addrtype     dd ?
     .h_length       dd ?
     .h_addr_list    dq ?
-end struct
+end struct&
 
             FLAG_STOP               = 00000001b
             FLAG_OPEN_SOCKET        = 00000010b
@@ -63,9 +62,9 @@ end struct
             FLAG_OVERRIDE_TIMEOUT   = 01000000b
             FLAG_SYNC_WAIT_REPLY    = 10000000b
             
-            DEFAULT_TIMEOUT     = 5         ; in s
+            DEFAULT_TIMEOUT         = 5         ; in s
             
-            SELECT_MS_EXTRA_WAIT   = 10
+            SELECT_MS_EXTRA_WAIT    = 10
 
 _bss        tm_send             TIMESPEC
             tm_receive          TIMESPEC
@@ -86,7 +85,7 @@ _bss        tm_send             TIMESPEC
             avg_latency         dt ?
             max_latency         dt ?
             
-            gp_buffer           rb 256
+            gp_buffer:          rb 256
             
 _data       so_timeout          TIMEVAL DEFAULT_TIMEOUT - 1, 900000
             sel_timeout         TIMEVAL DEFAULT_TIMEOUT, 0
@@ -104,37 +103,36 @@ _data       so_timeout          TIMEVAL DEFAULT_TIMEOUT - 1, 900000
             
             flags               db 0
             
-            in_green            db 27,'[0;38;5;78m',0
-            in_yellow           db 27,'[0;38;5;220m',0
-            in_red              db 27,'[0;38;5;160m',0
-            in_blue             db 27,'[0;38;5;44m',0
-            def_color           db 27,'[0m'
-            empty               db 0
+            in_green:           db 27,'[0;38;5;78m',0
+            in_yellow:          db 27,'[0;38;5;220m',0
+            in_red:             db 27,'[0;38;5;160m',0
+            in_blue:            db 27,'[0;38;5;44m',0
+            def_color:          db 27,'[0m'
+            empty:              db 0
             
-            host_str            db 'host', 0
-            network_str         db 'network', 0
-            unreach_str         db 'unreachable', 0
+            host_str:           db 'host', 0
+            network_str:        db 'network', 0
+            unreach_str:        db 'unreachable', 0
             
-            Send_str            db 'Send', 0
-            send_str            db 'send', 0
-            receive_str         db 'Receive', 0
+            Send_str:           db 'Send', 0
+            send_str:           db 'send', 0
+            receive_str:        db 'Receive', 0
             
             
-            poll_stats          db 27,"%sCurrent statistics: ",27,"[0m"
-            exit_stats          db "Sent: %u; Received: %u; Lost: %u;"
+            poll_stats:         db 27,"%sCurrent statistics: ",27,"[0m"
+            exit_stats:         db "Sent: %u; Received: %u; Lost: %u;"
                                 db " Unordered: %u; Min: %.3Lfms; %sAvg: %.3Lfms",27,"[0m; "
                                 db "Max: %.3Lfms",27,"[0m%c",0
             
             align 4
-            receive_ip_size     dd sizeof(SOCKADDR_IN)  ; ugly, but needed for recvfrom()
+            receive_ip_size     dd sizeof(receive_ip)   ; ugly, but needed for recvfrom()
             
             sent                dd 0
             received            dd 0
             lost                dd 0
             unordered           dd 0
             
-_code       Start entry         endbr64
-                                push        rdx
+_code       Start entry         push        rdx
                                 rdtsc                   ; starting random seed
                                 mov         cl, ah
                                 shl         rax, 32
@@ -161,18 +159,16 @@ _code       Start entry         endbr64
                                 pop         rdx
                                 nop
                                 nop
-                                libc.StartMain(&Main);
+                                libc.StartMain(Main);
             align 4                    
-            CTRL_C:             endbr64
-                                lock or     [flags], FLAG_STOP
+            CTRL_C:             lock or     [flags], FLAG_STOP
                                 ret
                                 
-            Help:               fputs(<"Please specify a host or IPv4 address.",10,0>, [stderr]);
+            Help:               fputs("Please specify a host or IPv4 address."\n, stderr);
                                 mov         eax, 1
                                 jmp         Main.end
                                 
-            Main:               endbr64
-                                enter       8, 0    ; fd socket
+            Main:               enter       8, 0    ; fd socket
                                 push        rdx     ; +16: *envp[]
                                 push        rsi     ;  +8: *argv[]
                                 push        rdi     ;  +0: argc
@@ -195,13 +191,13 @@ _code       Start entry         endbr64
                                 mov         edx, [rdx]
                                 mov         [send_ip.sin_addr], edx
                                 
-                                signal(SIGINT, &CTRL_C);
+                                signal(SIGINT, CTRL_C);
                                 
                                 socket(AF_INET, SOCK_DGRAM, IPPROTO_ICMP);
                                 test        eax, eax
                                 jns         @f
                                 errno();
-                                fprintf([stderr], "Couldn't create socket. Error %u: ", dd [rax]);
+                                fprintf(stderr, "Couldn't create socket. Error %u: ", dd [rax]);
                                 perror(NULL);
                                 mov         eax, 2
                                 jmp         .end
@@ -250,27 +246,26 @@ _code       Start entry         endbr64
                                 jmp         @f2
                         @@      cmp         [rax], word '0'
                                 je          @f
-                                fputs(<"Error in environment parameter format.", \
-                                    " Quitting...",10,0>, [stderr]);
+                                fputs("Error in environment parameter format. Quitting..."\n, stderr);
                                 mov         eax, 126
                                 jmp         .end
                                 
-                        @@      fputs("Pinging to: ", [stdout]);
+                        @@      fputs("Pinging to: ", stdout);
                                 
-                                gethostbyaddr(&send_ip.sin_addr, sizeof(IN_ADDR), AF_INET);
+                                gethostbyaddr(send_ip.sin_addr, sizeof(send_ip), AF_INET);
                                 test        rax, rax
                                 jz          @f
-                                fprintf([stdout], "'%s' (", [rax+HOSTENT.h_name]);
-                                inet_ntoa([send_ip.sin_addr]);
-                                fprintf([stdout], "%s) with %u data bytes:%c%c", rax, \
+                                fprintf(stdout, "'%s' (", [rax+HOSTENT.h_name]);
+                                inet_ntoa(send_ip.sin_addr.s_addr);
+                                fprintf(stdout, "%s) with %u data bytes:%c%c", rax, \
                                     (PAYLOAD_SIZE + sizeof(ICMPHDR) + 20), 10, 10);
                                 jmp         @f2
-                        @@      inet_ntoa([send_ip.sin_addr]);
-                                fprintf([stdout], "%s with %u data bytes:%c%c", rax, \
+                        @@      inet_ntoa(send_ip.sin_addr.s_addr);
+                                fprintf(stdout, "%s with %u data bytes:%c%c", rax, \
                                     (PAYLOAD_SIZE + sizeof(ICMPHDR) + 20), 10, 10);
                                 
-                        @@      setsockopt([rbp-8], SOL_SOCKET, SO_RCVTIMEO, &so_timeout, \
-                                    sizeof(TIMEVAL));
+                        @@      setsockopt([rbp-8], SOL_SOCKET, SO_RCVTIMEO, so_timeout, \
+                                    sizeof(so_timeout));
                                 
                                 wait
                                 push        1000
@@ -293,7 +288,7 @@ _code       Start entry         endbr64
                                 mov         ecx, 128 / 8
                                 rep         stosq
                                 
-                                fflush([stdout]);
+                                fflush(stdout);
                                     
                 .loop_ping:     test        [flags], FLAG_STOP
                                 jnz         .exit_ping
@@ -310,8 +305,8 @@ _code       Start entry         endbr64
                                 rol         rax, cl
                                 mov         [hash_seed], rax
                                 
-                                sendto([rbp-8], &icmp_send, (sizeof(ICMPHDR) + PAYLOAD_SIZE), \
-                                    0, &send_ip, sizeof(SOCKADDR_IN));
+                                sendto([rbp-8], icmp_send, (sizeof(ICMPHDR) + PAYLOAD_SIZE), \
+                                    0, send_ip, sizeof(send_ip));
                                 lea         rdx, [Send_str]
                                 test        rax, rax
                                 js          .err_ping
@@ -320,10 +315,10 @@ _code       Start entry         endbr64
                                 push        rax
                                 sub         rsp, 8
                                 
-                                clock_gettime(CLOCK_REALTIME, &tm_send);
+                                clock_gettime(CLOCK_REALTIME, tm_send);
                                 
                                 localtime(&tm_send.tv_sec);
-                                strftime(&gp_buffer, 255, "%Y-%m-%d %H:%M:%S.", rax);
+                                strftime(gp_buffer, 255, "%Y-%m-%d %H:%M:%S.", rax);
                                 lea         rdi, [gp_buffer]
                                 xor         al, al
                                 mov         ecx, 256
@@ -335,7 +330,7 @@ _code       Start entry         endbr64
                                 div         r11
                                 snprintf(rdi, 7, "%06lu", rax);
                                 
-                                inet_ntoa([send_ip.sin_addr]);
+                                inet_ntoa(send_ip.sin_addr.s_addr);
                                 
                                 movbe       r8w, [icmp_send.echo.id]
                                 movbe       r10w, [icmp_send.echo.sequence]
@@ -347,11 +342,11 @@ _code       Start entry         endbr64
                                 
                                 add         rsp, 8
                                 pop         r11
-                                fprintf([stdout], \
+                                fprintf(stdout, \
                                     <"Sent (%u:%u) ITER=%u LEN=%lu ID=%u ",27,"[36mSEQ=%u",27,"[0m ", \
-                                    "HASH=%016lX TIMESTAMP=%s TARGET=%s",10,0>, edx, ecx, [sent], \
-                                    r11, r8, r10, [tsc_hash], &gp_buffer, rax);
-                                fflush([stdout]);
+                                    "HASH=%016lX TIMESTAMP=%s TARGET=%s",10,0>, edx, ecx, sent, \
+                                    r11, r8, r10, tsc_hash, gp_buffer, rax);
+                                fflush(stdout);
                                 
                         @@@     mov         eax, [rbp-8]
                                 mov         ecx, 8
@@ -361,19 +356,19 @@ _code       Start entry         endbr64
                                 bts         [r11+rax], rdx
                                 
                                 mov         edi, [rbp-8]
-                                select(&edi+1, &fdread_set, NULL, NULL, &sel_timeout);
+                                select(edi+1, fdread_set, NULL, NULL, sel_timeout);
                                 lea         rdx, [receive_str]
                                 test        eax, eax
                                 js          .err_ping
                                 jnz         @f
-                                fprintf([stdout], <27,"[33mTimeout at ITER=%u",27,"[0m",10,0>, [sent]);
+                                fprintf(stdout, <27,"[33mTimeout at ITER=%u",27,"[0m",10,0>, sent);
                                 inc         [lost]
                                 lock or     [flags], FLAG_REPLY_TIMEOUT
                                 jmp         .next_ping
                                 
-                        @@      clock_gettime(CLOCK_REALTIME, &tm_receive);
-                                recvfrom([rbp-8], &icmp_receive, (sizeof(ICMPHDR) + PAYLOAD_SIZE), \
-                                    NULL, &receive_ip, &receive_ip_size);
+                        @@      clock_gettime(CLOCK_REALTIME, tm_receive);
+                                recvfrom([rbp-8], icmp_receive, (sizeof(ICMPHDR) + PAYLOAD_SIZE), \
+                                    NULL, receive_ip, &receive_ip_size);
                                 lea         rdx, [receive_str]
                                 test        rax, rax
                                 jle         .err_ping
@@ -385,10 +380,10 @@ _code       Start entry         endbr64
                                 inc         [unordered]
                                 movbe       dx, [icmp_receive.echo.sequence]
                                 movzx       rdx, dx
-                                fprintf([stdout], <27,"[1;33m", \
+                                fprintf(stdout, <27,"[1;33m", \
                                     "Ignoring too late reply at sequence: %u with hash: %016lX", \
-                                    27,"[0m",10,0>, rdx, [receive_hash]);
-                                fflush([stdout]);
+                                    27,"[0m",10,0>, rdx, receive_hash);
+                                fflush(stdout);
                                 jmp         @@b
                                 
                         @@      inc         [received]
@@ -419,7 +414,7 @@ _code       Start entry         endbr64
                                 
                                 push        rax
                                 sub         rsp, 8
-                                inet_ntoa([receive_ip.sin_addr]);
+                                inet_ntoa(receive_ip.sin_addr.s_addr);
                                 add         rsp, 8
                                 pop         rcx
                                 
@@ -467,12 +462,12 @@ _code       Start entry         endbr64
                                 movbe       r11w, [icmp_receive.echo.sequence]
                                 movzx       r8, r8w
                                 movzx       r11, r11w
-                                fprintf([stdout], \
+                                fprintf(stdout, \
                                     <"Received (%u:%u) ITER=%u LEN=%lu ID=%u ",27, \
                                     "[36mSEQ=%u",27, "[0m HASH=%s%016lX ", \
                                     "%sLATENCY: %.3Lfms",27, "[0m FROM=%s%s",27, \
-                                    "[0m",10,0>, edi, esi, [sent], rcx, r8, r11, \
-                                    r10, [receive_hash], mm4, [msec_latency], rdx, rax);
+                                    "[0m",10,0>, edi, esi, sent, rcx, r8, r11, \
+                                    r10, receive_hash, mm4, msec_latency, rdx, rax);
 
                 .next_ping:     test        [flags], FLAG_REPLY_ERROR
                                 jz          @f
@@ -514,8 +509,8 @@ _code       Start entry         endbr64
                                 fstp        [avg_latency]
                                 emms
                                 
-                        @@      fputc(10, [stdout]);
-                                fflush([stdout]);
+                        @@      fputc(10, stdout);
+                                fflush(stdout);
 
                                 mov         eax, [sent]
                                 mov         ecx, 100
@@ -524,11 +519,11 @@ _code       Start entry         endbr64
                                 test        edx, edx
                                 jnz         @f          ; Print status every 100 loops
                                 
-                                fprintf([stdout], &poll_stats, &in_blue, \
-                                    [sent], [received], [lost], [unordered], [min_latency], \
-                                    &in_blue, [avg_latency], [max_latency], 10);
-                                fputc(10, [stdout]);
-                                fflush([stdout]);
+                                fprintf(stdout, poll_stats, in_blue, \
+                                    sent, received, lost, unordered, min_latency, \
+                                    in_blue, avg_latency, max_latency, 10);
+                                fputc(10, stdout);
+                                fflush(stdout);
                                 
                         @@      test        [flags], FLAG_LOOP_DELAY
                                 jz          @f2
@@ -557,7 +552,7 @@ _code       Start entry         endbr64
                                 usleep(rdi);
                                 jmp         @f
                                 
-                        @@@     usleep([loop_delay]);
+                        @@@     usleep(loop_delay);
                                 
                         @@      movbe       dx, [icmp_send.echo.sequence]
                                 movbe       cx, [icmp_send.echo.id]
@@ -590,7 +585,7 @@ _code       Start entry         endbr64
                                 je          @f2
                                 cmp         [rax], dword EHOSTUNREACH
                                 je          @f
-                                fprintf([stderr], "An error (%u) has occurred: ", dd [rax]);
+                                fprintf(stderr, "An error (%u) has occurred: ", dd [rax]);
                                 perror(NULL);
                                 mov         eax, 127
                                 jmp         .end
@@ -610,24 +605,24 @@ _code       Start entry         endbr64
                                 jne         @f
                                 push        r8
                                 sub         rsp, 8
-                                fputs(<27,"[1;31mProgress suspended: ",0>, [stdout]);
+                                fputs(<27,"[1;31mProgress suspended: ",0>, stdout);
                                 add         rsp, 8
                                 pop         r8
                                 lea         rdx, [send_str]
-                        @@      fprintf([stdout], <27,"[0;31m%s error at ITER=%u: %s is %s", \
-                                    27,"[0m",10,0>, rdx, [sent], r8, &unreach_str);
-                                fflush([stdout]);
+                        @@      fprintf(stdout, <27,"[0;31m%s error at ITER=%u: %s is %s", \
+                                    27,"[0m",10,0>, rdx, sent, r8, unreach_str);
+                                fflush(stdout);
                                 jmp         .next_ping
                                 
-                .exit_ping:     fputs(<10,"Interrupted.",10,0>, [stdout]);
+                .exit_ping:     fputs(\n "Interrupted."\n, stdout);
                                 test        [flags], FLAG_WEIGHT_VALID
                                 jz          @f
-                                fprintf([stdout], &exit_stats, \
-                                    [sent], [received], [lost], [unordered], [min_latency], \
-                                    &in_blue, [avg_latency], [max_latency], 10);
+                                fprintf(stdout, exit_stats, \
+                                    sent, received, lost, unordered, min_latency, \
+                                    in_blue, avg_latency, max_latency, 10);
                                 jmp         @f2
-                        @@      fprintf([stdout], "Sent: %u; Received: %u; Lost: %u%c", \
-                                    [sent], [received], [lost], 10);
+                        @@      fprintf(stdout, "Sent: %u; Received: %u; Lost: %u%c", \
+                                    sent, received, lost, 10);
                         @@      nop
                                 
                 .end_success:   xor         eax, eax
